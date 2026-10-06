@@ -1,0 +1,24 @@
+---
+description: Конвенции клиента EVA JSON-RPC и секретов
+alwaysApply: true
+---
+
+# EVA API
+
+- Адрес и токен только из `.env`: `EVA_BASE_URL`, `EVA_TOKEN`. Не хардкодить токен и не коммитить `.env`.
+- Вызов: `POST {EVA_BASE_URL}/api/`, тело JSON-RPC 2.2, заголовок `Authorization: Bearer <token>`, флаг `admin_mode`.
+- Статистика входа: `CmfPerson.list`, `CmfAudit.get`, `CmfAudit.count`. Успешный вход — `operate == login_successed`.
+- `CmfPerson.list` листать через `slice`, пока страница короче шага.
+- Ошибки HTTP и поле `error` в ответе пробрасывать исключением. Не проверять статус через `assert`.
+- Не печатать токен и заголовок `Authorization` в лог.
+
+```python
+# плохо
+token = "секрет"
+assert resp.status_code == 200
+
+# хорошо
+token = os.environ["EVA_TOKEN"]
+if body.get("error"):
+    raise EvaApiError(body["error"])
+```
