@@ -10,7 +10,7 @@ from auth_statistic import PAGE_SIZE, EvaApiError, EvaClient, load_settings
 
 DEFAULT_DAYS = 30
 DEFAULT_OUTPUT = "inactive_participants.csv"
-DEFAULT_ROLE = "Участник"
+DEFAULT_GROUP = "Участники"
 PROFILE_CHUNK = 50
 
 
@@ -19,7 +19,7 @@ class Participant:
     name: str
     login: str
     does_not_work: bool | None = None
-    spaces: set[str] = field(default_factory=set)
+    groups: set[str] = field(default_factory=set)
 
 
 def fetch_page(
@@ -80,32 +80,6 @@ def iter_pages(
         offset += PAGE_SIZE
 
 
-def class_name(obj: dict) -> str:
-    name = obj.get("class_name") or obj.get("class") or ""
-    if name:
-        return str(name)
-    ident = str(obj.get("id") or "")
-    if ":" in ident:
-        return ident.split(":", 1)[0]
-    return ""
-
-
-def is_group(obj: dict) -> bool:
-    kind = class_name(obj)
-    return kind in {"CmfPersonGroup", "CmfGroup"} or "Group" in kind
-
-
-def space_name(assignment: dict) -> str:
-    for key in ("parent", "project"):
-        value = assignment.get(key)
-        if isinstance(value, dict):
-            name = value.get("name") or value.get("code") or value.get("id") or ""
-            return str(name)
-        if isinstance(value, str) and value:
-            return value
-    return ""
-
-
 def as_optional_bool(value) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -142,7 +116,7 @@ def author_login(record: dict) -> str:
     return ""
 
 
-def remember_person(people: dict[str, Participant], record: dict, space: str) -> None:
+def remember_person(people: dict[str, Participant], record: dict, group_name: str) -> None:
     login = str(record.get("login") or "").strip()
     if not login:
         return
@@ -157,34 +131,24 @@ def remember_person(people: dict[str, Participant], record: dict, space: str) ->
         fired = as_optional_bool(record.get("does_not_work"))
         if fired is True or person.does_not_work is None:
             person.does_not_work = fired
-    if space:
-        person.spaces.add(space)
+    if group_name:
+        person.groups.add(group_name)
 
 
-def find_roles(client: EvaClient, role_name: str) -> list[dict]:
-    roles: list[dict] = []
+def find_groups(client: EvaClient, needle: str) -> list[dict]:
+    groups: list[dict] = []
     for page in iter_pages(
         client,
-        "CmfProjectRole.list",
+        "CmfPersonGroup.list",
         fields=["id", "name", "code"],
     ):
-        roles.extend(page)
-    matched = [
-        role for role in roles if str(role.get("name") or "").strip() == role_name
-    ]
+        groups.extend(page)
+    matched = [group for group in groups if needle in str(group.get("name") or "")]
     if matched:
-        logging.info("Роль «%s»: %s", role_name, len(matched))
+        logging.info("Групп со словом «%s»: %s", needle, len(matched))
         return matched
-
-    names = sorted(
-        {
-            f"{role.get('name') or 'без имени'} ({role.get('code') or role.get('id')})"
-            for role in roles
-        }
-    )
-    listing = "\n".join(names) if names else "список ролей пуст"
     raise SystemExit(
-        f"Роль «{role_name}» не найдена. Файл отчёта не записан.\n{listing}"
+        f"Групп со словом «{needle}» в имени нет. Файл отчёта не записан."
     )
 
 
@@ -203,70 +167,17 @@ def group_members(client: EvaClient, group_id: str) -> list[dict]:
     return members
 
 
-def person_by_id(client: EvaClient, person_id: str, cache: dict[str, dict]) -> dict:
-    if person_id in cache:
-        return cache[person_id]
-    body = client.call(
-        "CmfPerson.get",
-        params={
-            "id": person_id,
-            "fields": ["name", "login", "does_not_work"],
-        },
-    )
-    result = body.get("result")
-    record = result if isinstance(result, dict) else {}
-    cache[person_id] = record
-    return record
-
-
-def collect_participants(client: EvaClient, roles: list[dict]) -> dict[str, Participant]:
+def collect_participants(client: EvaClient, groups: list[dict]) -> dict[str, Participant]:
     people: dict[str, Participant] = {}
-    groups: dict[str, list[dict]] = {}
-    person_cache: dict[str, dict] = {}
-    for role in roles:
-        role_id = role.get("id")
-        if not role_id:
+    for group in groups:
+        group_id = str(group.get("id") or "")
+        if not group_id:
             continue
-        for page in iter_pages(
-            client,
-            "CmfProjectRoleAssign.list",
-            filter_=[["project_role.id", "==", role_id]],
-            fields=[
-                "id",
-                "parent",
-                "parent.name",
-                "members",
-                "members.id",
-                "members.name",
-                "members.login",
-                "members.class_name",
-                "members.does_not_work",
-            ],
-        ):
-            for assignment in page:
-                space = space_name(assignment)
-                members = assignment.get("members") or []
-                if isinstance(members, dict):
-                    members = [members]
-                for member in members:
-                    obj = member if isinstance(member, dict) else {"id": member}
-                    if is_group(obj):
-                        group_id = str(obj.get("id") or "")
-                        if not group_id:
-                            continue
-                        if group_id not in groups:
-                            groups[group_id] = group_members(client, group_id)
-                            logging.info(
-                                "Группа %s: участников %s",
-                                obj.get("name") or group_id,
-                                len(groups[group_id]),
-                            )
-                        for person in groups[group_id]:
-                            remember_person(people, person, space)
-                        continue
-                    if not obj.get("login") and obj.get("id"):
-                        obj = {**obj, **person_by_id(client, str(obj["id"]), person_cache)}
-                    remember_person(people, obj, space)
+        label = str(group.get("name") or group.get("code") or group_id)
+        members = group_members(client, group_id)
+        logging.info("Группа %s: участников %s", label, len(members))
+        for person in members:
+            remember_person(people, person, label)
     logging.info("Участников с логином: %s", len(people))
     return people
 
@@ -278,7 +189,7 @@ def fill_profiles(client: EvaClient, people: dict[str, Participant]) -> None:
         page = fetch_page(
             client,
             "CmfPerson.list",
-            filter_=[["login", "in", chunk]],
+            filter_=[["login", "IN", chunk]],
             fields=["name", "login", "does_not_work"],
             slice_=[0, len(chunk)],
         )
@@ -405,7 +316,7 @@ def build_rows(
                 "name": person.name,
                 "login": person.login,
                 "does_not_work": work_status(person.does_not_work),
-                "spaces": ", ".join(sorted(person.spaces)),
+                "groups": ", ".join(sorted(person.groups)),
                 "count": count,
                 "last_activity": last_in_period if active else history.get(person.login, "никогда"),
                 "active": "да" if active else "нет",
@@ -416,13 +327,13 @@ def build_rows(
     return rows
 
 
-def build_report(client: EvaClient, since: str, role_name: str) -> list[dict]:
-    roles = find_roles(client, role_name)
-    people = collect_participants(client, roles)
+def build_report(client: EvaClient, since: str, group_name: str) -> list[dict]:
+    groups = find_groups(client, group_name)
+    people = collect_participants(client, groups)
     if people:
         fill_profiles(client, people)
     else:
-        logging.info("Назначений роли с логином нет")
+        logging.info("В группах нет участников с логином")
         return []
     activity = collect_activity(client, since, set(people))
     return build_rows(client, people, activity)
@@ -436,7 +347,7 @@ def write_csv(path: Path, rows: list[dict]) -> None:
                 "ФИО",
                 "Логин",
                 "Не работает/уволен",
-                "Пространства",
+                "Группы",
                 "Число действий за период",
                 "Дата последней активности",
                 "Активен",
@@ -448,7 +359,7 @@ def write_csv(path: Path, rows: list[dict]) -> None:
                     row["name"],
                     row["login"],
                     row["does_not_work"],
-                    row["spaces"],
+                    row["groups"],
                     row["count"],
                     row["last_activity"],
                     row["active"],
@@ -458,7 +369,7 @@ def write_csv(path: Path, rows: list[dict]) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Участники EVA с ролью в пространствах и без действий за период"
+        description="Участники групп проекта EVA и их действия за период"
     )
     parser.add_argument(
         "--days",
@@ -472,16 +383,16 @@ def parse_args() -> argparse.Namespace:
         help="Путь к CSV (по умолчанию inactive_participants.csv)",
     )
     parser.add_argument(
-        "--role",
-        default=DEFAULT_ROLE,
-        help="Имя роли в пространстве (по умолчанию «Участник»)",
+        "--group",
+        default=DEFAULT_GROUP,
+        help="Подстрока в имени группы (по умолчанию «Участники»)",
     )
     args = parser.parse_args()
     if args.days < 1:
         parser.error("--days должен быть больше нуля")
-    if not str(args.role).strip():
-        parser.error("--role не должен быть пустым")
-    args.role = str(args.role).strip()
+    if not str(args.group).strip():
+        parser.error("--group не должен быть пустым")
+    args.group = str(args.group).strip()
     return args
 
 
@@ -492,7 +403,7 @@ def main() -> None:
     logging.info("Период действий: с %s", since)
     base_url, token = load_settings()
     with EvaClient(base_url, token) as client:
-        rows = build_report(client, since, args.role)
+        rows = build_report(client, since, args.group)
     output = Path(args.output)
     write_csv(output, rows)
     inactive = sum(1 for row in rows if row["active"] == "нет")
