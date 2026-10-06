@@ -3,4 +3,5 @@
 __pycache__/
 *.py[cod]
 statistics.csv
+inactive_participants.csv
 docs/
