@@ -3,4 +3,4 @@
 __pycache__/
 *.py[cod]
 statistics.csv
-EvaTeam.mhtml
+docs/

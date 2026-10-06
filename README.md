@@ -34,7 +34,7 @@ EVA_TOKEN=ваш_токен
 ```bash
 cd "/Users/mjey/Projects/API EVA"
 source .venv/bin/activate
-python auth_statistic.py
+python auth_statistic.py --days 10
 ```
 
 Другой период и имя файла:

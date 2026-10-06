@@ -2,4 +2,4 @@
 .venv/
 __pycache__/
 *.csv
-EvaTeam.mhtml
+docs/
